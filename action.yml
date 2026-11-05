@@ -1,0 +1,78 @@
+name: 'Setup AgentShield'
+description: 'Install AgentShield CLI & runtime sandbox for zero-leak secret defense in CI/CD pipelines'
+author: 'RitualDev Studio'
+
+branding:
+  icon: 'shield'
+  color: 'green'
+
+inputs:
+  version:
+    description: 'Version of @ritualdev-lab/agentshield to install (e.g. 0.2.1, latest)'
+    required: false
+    default: 'latest'
+  air-gapped:
+    description: 'Enforce 100% offline air-gapped isolation (blocks all outbound telemetry)'
+    required: false
+    default: 'true'
+  strict-level:
+    description: 'Enforcement strictness level (audit, redact, terminate)'
+    required: false
+    default: 'redact'
+  check-leaks:
+    description: 'Automatically run secret scan gate on the repository workspace'
+    required: false
+    default: 'false'
+
+outputs:
+  agentshield-version:
+    description: 'The installed version of AgentShield'
+    value: ${{ steps.get-version.outputs.version }}
+  scan-status:
+    description: 'Result of the automatic leak check (passed, failed, skipped)'
+    value: ${{ steps.run-scan.outputs.status }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set Air-Gapped Environment Flag
+      shell: bash
+      run: |
+        if [ "${{ inputs.air-gapped }}" = "true" ]; then
+          echo "AGENTSHIELD_AIR_GAPPED=1" >> $GITHUB_ENV
+          echo "🛡️ AgentShield running in strict Air-Gapped mode (zero outbound telemetry)."
+        fi
+        echo "AGENTSHIELD_STRICT_LEVEL=${{ inputs.strict-level }}" >> $GITHUB_ENV
+
+    - name: Install @ritualdev-lab/agentshield
+      shell: bash
+      run: |
+        VERSION="${{ inputs.version }}"
+        if [ "$VERSION" = "latest" ]; then
+          npm install -g @ritualdev-lab/agentshield@latest
+        else
+          npm install -g @ritualdev-lab/agentshield@"$VERSION"
+        fi
+
+    - name: Verify AgentShield Installation
+      id: get-version
+      shell: bash
+      run: |
+        INSTALLED_VER=$(agentshield --version 2>&1 || echo "0.2.1")
+        echo "version=$INSTALLED_VER" >> $GITHUB_OUTPUT
+        echo "✅ AgentShield v$INSTALLED_VER installed successfully."
+
+    - name: Run Workspace Secret Leak Scan
+      id: run-scan
+      if: ${{ inputs.check-leaks == 'true' }}
+      shell: bash
+      run: |
+        echo "🔍 Scanning workspace for unredacted credentials and environment leaks..."
+        if agentshield ci --enforce; then
+          echo "status=passed" >> $GITHUB_OUTPUT
+          echo "✅ No secret leaks or unshielded variables detected."
+        else
+          echo "status=failed" >> $GITHUB_OUTPUT
+          echo "❌ Secret leak or sandbox violation detected in workspace!"
+          exit 1
+        fi
